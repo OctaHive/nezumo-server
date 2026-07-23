@@ -1,0 +1,24 @@
+[Unit]
+Description=Nezumo backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=nezumo
+Group=nezumo
+WorkingDirectory=/opt/nezumo/current
+Environment=RUST_LOG=info
+EnvironmentFile=/etc/nezumo/nezumo.env
+ExecStart=/opt/nezumo/current/nezumo
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

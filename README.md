@@ -299,6 +299,16 @@ SQLX_OFFLINE=true cargo check --locked
 Some integration paths require live PostgreSQL, Redis, S3, SMTP, or renderer
 services. Start the relevant Compose dependencies before exercising them.
 
+## Continuous integration and releases
+
+GitHub Actions runs formatting checks and tests for every pushed commit and
+pull request. Tags named `release` or beginning with `release-` build a Linux
+release package and deploy it to a configured production server over SSH.
+
+See [GitHub Actions deployment](documentation/github_actions_deployment.md) for
+the required GitHub secrets, one-time systemd setup, atomic deployment, and
+rollback behaviour.
+
 ## Runtime model
 
 Startup proceeds in dependency order: database connection and migrations,
