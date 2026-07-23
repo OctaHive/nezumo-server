@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE pending_registrations\n        SET verified_at = NOW(),\n            completion_token = $3,\n            completion_expires_at = $4\n        WHERE email = $1\n          AND verification_code = $2\n          AND verification_expires_at > NOW()\n        RETURNING id, email, verification_code, verification_expires_at, verified_at, completion_token, completion_expires_at, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "verification_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "verification_expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "verified_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "completion_token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "completion_expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "a1eadab02c07c2b06c46ea9ba687f4363fb1f9c4229fe0b656d0408194651a59"
+}

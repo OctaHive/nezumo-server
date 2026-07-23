@@ -1,0 +1,4 @@
+[env]
+# SQLx macros must use the committed `.sqlx` metadata when the backend is
+# compiled inside `cross`, where the development database is not reachable.
+SQLX_OFFLINE = "true"

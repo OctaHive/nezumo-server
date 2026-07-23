@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO oauth_accounts (user_id, provider, provider_user_id, access_token, refresh_token, expires_at)\n        VALUES ($1, $2, $3, $4, $5, $6)\n        ON CONFLICT (provider, provider_user_id)\n        DO UPDATE SET\n            user_id = EXCLUDED.user_id,\n            access_token = EXCLUDED.access_token,\n            refresh_token = EXCLUDED.refresh_token,\n            expires_at = EXCLUDED.expires_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c0ec0f897cc004befeca7008f4d2c4ce590bc54b1338070e9ffe1df24a44430"
+}

@@ -1,0 +1,1 @@
+ALTER TABLE boards ADD COLUMN link_access TEXT NOT NULL DEFAULT 'none';

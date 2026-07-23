@@ -1,0 +1,137 @@
+{
+  "fonts": [
+    {
+      "id": "roboto",
+      "name": "Roboto",
+      "variants": {
+        "regular": "roboto-regular",
+        "bold": "roboto-bold",
+        "italic": "roboto-italic",
+        "boldItalic": "roboto-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "noto-sans",
+      "name": "Noto Sans",
+      "variants": {
+        "regular": "notosans-regular",
+        "bold": "notosans-bold",
+        "italic": "notosans-italic",
+        "boldItalic": "notosans-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "times",
+      "name": "Times New Roman",
+      "variants": {
+        "regular": "times-new-roman",
+        "bold": "times-bold",
+        "italic": "times-italic",
+        "boldItalic": "times-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "source-code-pro",
+      "name": "Source Code Pro",
+      "variants": {
+        "regular": "sourcecodepro-regular",
+        "bold": "sourcecodepro-bold",
+        "italic": "sourcecodepro-italic",
+        "boldItalic": "sourcecodepro-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "roboto-condensed",
+      "name": "Roboto Condensed",
+      "variants": {
+        "regular": "robotocondensed-regular",
+        "bold": "robotocondensed-bold",
+        "italic": "robotocondensed-italic",
+        "boldItalic": "robotocondensed-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "inter",
+      "name": "Inter",
+      "variants": {
+        "regular": "inter-regular",
+        "bold": "inter-bold",
+        "italic": "inter-italic",
+        "boldItalic": "inter-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "open-sans",
+      "name": "Open Sans",
+      "variants": {
+        "regular": "opensans-regular",
+        "bold": "opensans-bold",
+        "italic": "opensans-italic",
+        "boldItalic": "opensans-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "montserrat",
+      "name": "Montserrat",
+      "variants": {
+        "regular": "montserrat-regular",
+        "bold": "montserrat-bold",
+        "italic": "montserrat-italic",
+        "boldItalic": "montserrat-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "oswald",
+      "name": "Oswald",
+      "variants": {
+        "regular": "oswald-regular",
+        "bold": "oswald-bold",
+        "italic": "oswald-italic",
+        "boldItalic": "oswald-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "shantell-sans",
+      "name": "Shantell Sans",
+      "variants": {
+        "regular": "shantellsans-regular",
+        "bold": "shantellsans-bold",
+        "italic": "shantellsans-italic",
+        "boldItalic": "shantellsans-bolditalic"
+      },
+      "sdf": true,
+      "vector": true
+    },
+    {
+      "id": "comic-sans-ms",
+      "name": "Comic Sans MS",
+      "variants": {
+        "regular": "comicsansms-regular",
+        "bold": "comicsansms-bold",
+        "italic": "comicsansms-regular",
+        "boldItalic": "comicsansms-bold"
+      },
+      "sdf": true,
+      "vector": true
+    }
+  ],
+  "defaultFont": "roboto"
+}

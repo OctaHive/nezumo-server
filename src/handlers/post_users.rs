@@ -1,0 +1,813 @@
+//! Registration, password reset, verification, and profile-upload handlers.
+
+use axum::{
+    extract::{Extension, Multipart, Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use chrono::Duration;
+use chrono::Utc;
+use rand::distributions::Alphanumeric;
+use rand::Rng;
+use serde_json::json;
+use std::sync::Arc;
+use tracing::error;
+use tracing::instrument;
+use uuid::Uuid;
+use validator::Validate;
+
+use crate::database::server_settings;
+use crate::database::users::{
+    check_user_exists_by_email, check_user_exists_in_db, delete_all_password_reset_codes_for_user,
+    delete_pending_registration, fetch_current_password_reset_code_from_db,
+    fetch_pending_registration_by_email, fetch_profile_picture_url_from_db,
+    fetch_user_by_email_from_db, insert_user_into_db, insert_user_password_reset_code_into_db,
+    mark_pending_registration_verified, update_user_password_in_db,
+    update_user_profile_picture_in_db, upsert_pending_registration,
+};
+use crate::handlers::login::issue_login_response;
+use crate::mail::send::send_mail;
+use crate::models::user::{
+    User, UserInsertBody, UserInsertResponse, UserPasswordResetConfirmBody,
+    UserPasswordResetRequestBody, UserProfilePictureUploadBody, UserProfilePictureUploadResponse,
+    UserRegisterBody, UserRegisterCompleteBody, UserRegisterEmailVerifyBody,
+    UserRegisterVerifyResponse,
+};
+use crate::routes::AppState;
+use crate::storage::delete::delete_from_storage;
+use crate::storage::presign_url::generate_presigned_url;
+use crate::storage::upload::upload_to_storage;
+use crate::utils::process_image::process_image;
+use crate::{
+    core::config::{get_env_bool, get_env_with_default},
+    utils::auth::hash_password,
+};
+use chrono::Duration as ChronoDuration;
+
+// --- Route Handler ---
+
+async fn require_public_registration(
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let settings = server_settings::load(&state.database).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Could not read server settings." })),
+        )
+    })?;
+    if !settings.public_registration_enabled {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "Public registration is disabled.",
+                "code": "registration_disabled"
+            })),
+        ));
+    }
+    Ok(())
+}
+
+// Define the API endpoint
+#[utoipa::path(
+    post,
+    path = "/users",
+    tag = "user",
+    security(
+        ("jwt_token" = [])
+    ),
+    request_body = UserInsertBody,
+    responses(
+        (status = 200, description = "User created successfully", body = UserInsertResponse),
+        (status = 400, description = "Validation error", body = String),
+        (status = 401, description = "Unauthorized", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+#[instrument(skip(state, user))]
+pub async fn post_user(
+    State(state): State<Arc<AppState>>,
+    Json(user): Json<UserInsertBody>,
+) -> Result<Json<UserInsertResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if user.totp.unwrap_or(false) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "TOTP must be enabled by the user from security settings."
+            })),
+        ));
+    }
+
+    // Validate input
+    if let Err(errors) = user.validate() {
+        let error_messages: Vec<String> = errors
+            .field_errors()
+            .iter()
+            .flat_map(|(_, errors)| {
+                errors
+                    .iter()
+                    .map(|e| e.message.clone().unwrap_or_default().to_string())
+            })
+            .collect();
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": error_messages.join(", ") })),
+        ));
+    }
+
+    // Hash the password before saving it
+    let hashed_password = hash_password(&user.password).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to hash password." })),
+        )
+    })?;
+
+    match insert_user_into_db(
+        &state.database,
+        &user.username,
+        &user.email,
+        &hashed_password,
+        None,
+        1,
+        1,
+    )
+    .await
+    {
+        Ok(new_user) => Ok(Json(new_user)),
+        Err(_err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Could not create the user." })),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/users/{id}/profile-picture",
+    tag = "user",
+    security(("jwt_token" = [])),
+    request_body = UserProfilePictureUploadBody,
+    responses(
+        (status = 200, description = "Profile picture uploaded successfully", body = UserProfilePictureUploadResponse),
+        (status = 400, description = "Bad request, invalid UUID or no file uploaded", body = String),
+        (status = 403, description = "Forbidden, insufficient permissions", body = serde_json::Value),
+        (status = 500, description = "Internal server error, file upload or database issue", body = String)
+    )
+)]
+/// Uploads and assigns the authenticated user's profile picture.
+pub async fn post_user_profilepicture(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<User>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Config
+    const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB (updated from 5MB)
+
+    // Authorization logic
+    let allowed_role_levels = vec![2];
+    let user_id = if id == "current" {
+        current_user.id
+    } else {
+        if !allowed_role_levels.contains(&current_user.role_level)
+            && id != current_user.id.to_string()
+        {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "You do not have permission to upload for this user." })),
+            ));
+        }
+        match Uuid::parse_str(&id) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Invalid UUID format." })),
+                ));
+            }
+        }
+    };
+
+    let bucket = get_env_with_default("STORAGE_BUCKET_PROFILE_PICTURES", "profile_pictures");
+
+    let debug = get_env_bool("IMAGE_DEBUG", false);
+
+    // Check existing profile picture
+    if let Some(old_url) = fetch_profile_picture_url_from_db(&state.database, user_id)
+        .await
+        .map_err(|e| {
+            error!("DB fetch error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to check existing profile picture" })),
+            )
+        })?
+    {
+        // Remove the endpoint prefix
+        let path = old_url
+            .strip_prefix(&state.storage.endpoint_url)
+            .unwrap_or(&old_url);
+        // Remove leading slash if present
+        let path = path.trim_start_matches('/');
+
+        // Now, remove the bucket prefix
+        let object_key = path.strip_prefix(&format!("{}/", bucket)).unwrap_or(path);
+
+        // Now use object_key
+        if let Err(e) = delete_from_storage(&state.storage, &bucket, object_key).await {
+            error!("Old image deletion failed: {e}");
+            // Continue with upload despite deletion failure
+        }
+    }
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        error!("Multipart error: {e}");
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid file data" })),
+        )
+    })? {
+        if field.name() == Some("profile_picture") {
+            // Content type validation
+            let content_type = field.content_type().unwrap_or("").to_string();
+            if !["image/webp", "image/jpeg", "image/png"].contains(&content_type.as_str()) {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    Json(json!({ "error": "Only WebP, JPEG, and PNG formats allowed" })),
+                ));
+            }
+
+            // Read and validate file size
+            let data = field.bytes().await.map_err(|e| {
+                error!("File read error: {e}");
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Failed to read file" })),
+                )
+            })?;
+
+            if data.len() > MAX_FILE_SIZE {
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(
+                        json!({ "error": format!("File too large (max {}MB)", MAX_FILE_SIZE / 1024 / 1024) }),
+                    ),
+                ));
+            }
+
+            // Process image
+            let processed_data = process_image(data, 300, 300, debug).await.map_err(|e| {
+                error!("Image processing failed: {e}");
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": format!("Image processing failed: {e}") })),
+                )
+            })?;
+
+            // Generate secure filename
+            let timestamp = chrono::Utc::now().timestamp();
+            let object_key = format!("profile_pictures/{}_{}.webp", user_id, timestamp);
+
+            // Upload processed image
+            let file_url = upload_to_storage(&state.storage, &bucket, &object_key, &processed_data)
+                .await
+                .map_err(|e| {
+                    error!("Upload error: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "Upload failed" })),
+                    )
+                })?;
+
+            // Update database
+            if let Err(e) =
+                update_user_profile_picture_in_db(&state.database, user_id, &file_url).await
+            {
+                error!("DB update error: {e}");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Failed to update profile URL" })),
+                ));
+            }
+
+            // Generate pre-signed URL (valid for 15 minutes)
+            let presigned_url = generate_presigned_url(&state.storage, &bucket, &object_key, 900)
+                .await
+                .map_err(|e| {
+                    error!("Presign error: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "Failed to generate presigned URL" })),
+                    )
+                })?;
+
+            return Ok(Json(json!({
+                "profile_picture_url": file_url,
+                "profile_picture_presigned_url": presigned_url
+            })));
+        }
+    }
+
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "No file uploaded" })),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/reset",
+    tag = "user",
+    security(("jwt_token" = [])),  // If you want to secure the route with JWT authentication, add this
+    request_body = UserPasswordResetRequestBody,
+    responses(
+        (status = 200, description = "Password reset code sent successfully", body = String),
+        (status = 400, description = "Bad request, invalid email format", body = String),
+        (status = 404, description = "User not found", body = String),
+        (status = 500, description = "Internal server error, database or email issue", body = String)
+    )
+)]
+/// Starts or completes the password-reset challenge flow.
+pub async fn post_user_password_reset(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UserPasswordResetRequestBody>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    // 1. Find user by email
+    let user = match fetch_user_by_email_from_db(&state.database, &body.email).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return Ok(StatusCode::OK), // Don't reveal if email exists
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            ))
+        }
+    };
+
+    // 2. Generate code and expiry
+    let code: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let expires_at = Utc::now() + Duration::hours(24);
+
+    // 3. Store code in DB
+    insert_user_password_reset_code_into_db(&state.database, user.id, &code, expires_at)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to store reset code"})),
+            )
+        })?;
+
+    // 4. Send email
+    let subject = "Password reset request";
+    let body = format!(
+        "Use this code to reset your password: {}\n\nThis code will expire in 24 hours.",
+        code
+    );
+    send_mail(&state.mail, &user.email, subject, &body)
+        .await
+        .map_err(|e| {
+            error!("Failed to send password reset email: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to send email"})),
+            )
+        })?;
+
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    post,
+    path = "/reset/verify",
+    tag = "user",
+    security(("jwt_token" = [])),  // If you want to secure the route with JWT authentication, add this
+    request_body = UserPasswordResetConfirmBody,
+    responses(
+        (status = 200, description = "Password reset successful", body = String),
+        (status = 400, description = "Bad request, invalid code or email", body = String),
+        (status = 404, description = "User not found", body = String),
+        (status = 400, description = "Invalid or expired reset code", body = String),
+        (status = 500, description = "Internal server error, database issue", body = String)
+    )
+)]
+#[instrument(skip(state, body))]
+pub async fn post_user_password_reset_verify(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UserPasswordResetConfirmBody>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    // 1. Validate new password (example: at least 8 chars)
+    if body.new_password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Password must be at least 8 characters long." })),
+        ));
+    }
+
+    // 2. Find user by email
+    let user = match fetch_user_by_email_from_db(&state.database, &body.email).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            // Don't reveal if email exists or not
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid code or email." })),
+            ));
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Database error." })),
+            ));
+        }
+    };
+
+    // 3. Fetch and verify reset code
+    #[allow(unused_variables)] // Currently not needed for further processing
+    let reset_code = match fetch_current_password_reset_code_from_db(&state.database, user.id).await
+    {
+        Ok(Some(code)) => {
+            // Check if the reset code from the database matches the provided code
+            if code.code == body.code {
+                // The reset code is valid
+                // Proceed with the next steps
+            } else {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Invalid or expired code." })),
+                ));
+            }
+        }
+        _ => {
+            // If no code was found or there's an error, return an invalid code response
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid or expired code." })),
+            ));
+        }
+    };
+
+    // 4. Hash new password
+    let new_password_hash = hash_password(&body.new_password).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to hash password." })),
+        )
+    })?;
+
+    // 5. Update user's password
+    update_user_password_in_db(&state.database, user.id, &new_password_hash)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to update password." })),
+            )
+        })?;
+
+    // 6. Invalidate the reset code
+    delete_all_password_reset_codes_for_user(&state.database, user.id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to invalidate reset code." })),
+            )
+        })?;
+
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    post,
+    path = "/register",
+    tag = "user",
+    request_body = UserRegisterBody,
+    responses(
+        (status = 200, description = "Verification email sent", body = String),
+        (status = 400, description = "Invalid input", body = String),
+        (status = 409, description = "Email already exists", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+/// Starts email-based registration for a new account.
+pub async fn post_user_register(
+    State(state): State<Arc<AppState>>,
+    Json(user): Json<UserRegisterBody>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    require_public_registration(&state).await?;
+    // Validate input
+    if let Err(errors) = user.validate() {
+        let error_messages: Vec<String> = errors
+            .field_errors()
+            .iter()
+            .flat_map(|(_, errors)| {
+                errors
+                    .iter()
+                    .map(|e| e.message.clone().unwrap_or_default().to_string())
+            })
+            .collect();
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": error_messages.join(", ") })),
+        ));
+    }
+
+    // Check if email exists
+    if check_user_exists_by_email(&state.database, &user.email)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Database error: {e}") })),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Email already exists." })),
+        ));
+    }
+
+    // Generate 6-digit numeric verification code
+    let code: String = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
+    let expires_at = Utc::now() + Duration::minutes(10);
+
+    // Upsert pending registration
+    upsert_pending_registration(&state.database, &user.email, &code, expires_at)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to create pending registration." })),
+            )
+        })?;
+
+    // Send verification email
+    let subject = "Verify your email";
+    let body = format!(
+        "Welcome! Please verify your email by using this code: {}\n\nThis code will expire in 10 minutes.",
+        code
+    );
+    send_mail(&state.mail, &user.email, subject, &body)
+        .await
+        .map_err(|e| {
+            error!("Failed to send verification email: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to send verification email." })),
+            )
+        })?;
+
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    post,
+    path = "/register/verify",
+    tag = "user",
+    request_body = UserRegisterEmailVerifyBody,
+    responses(
+        (status = 200, description = "Email verified successfully", body = UserRegisterVerifyResponse),
+        (status = 400, description = "Invalid code or email", body = String),
+        (status = 404, description = "Pending registration not found", body = String),
+        (status = 410, description = "Verification code expired", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+/// Verifies the one-time registration code sent to the user.
+pub async fn post_user_register_verify(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UserRegisterEmailVerifyBody>,
+) -> Result<Json<UserRegisterVerifyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_public_registration(&state).await?;
+    // 1. Find pending registration
+    let pending = match fetch_pending_registration_by_email(&state.database, &body.email).await {
+        Ok(Some(pending)) => pending,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Pending registration not found." })),
+            ))
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Database error." })),
+            ))
+        }
+    };
+
+    // 2. Check code and expiry
+    if pending.verification_code != body.code {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid code." })),
+        ));
+    }
+
+    if Utc::now() > pending.verification_expires_at {
+        return Err((
+            StatusCode::GONE,
+            Json(json!({ "error": "Verification code expired." })),
+        ));
+    }
+
+    // 3. Mark verified
+    let completion_token: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(48)
+        .map(char::from)
+        .collect();
+    let completion_expires_at = Utc::now() + ChronoDuration::minutes(30);
+
+    let updated = mark_pending_registration_verified(
+        &state.database,
+        &body.email,
+        &body.code,
+        &completion_token,
+        completion_expires_at,
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to update verification status." })),
+        )
+    })?;
+
+    if updated.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid or expired code." })),
+        ));
+    }
+
+    Ok(Json(UserRegisterVerifyResponse {
+        completion_token,
+        expires_at: completion_expires_at,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/register/complete",
+    tag = "user",
+    request_body = UserRegisterCompleteBody,
+    responses(
+        (status = 200, description = "Registration completed", body = serde_json::Value),
+        (status = 400, description = "Invalid input", body = String),
+        (status = 404, description = "Pending registration not found", body = String),
+        (status = 409, description = "User/email already exists", body = String),
+        (status = 410, description = "Verification code expired", body = String),
+        (status = 500, description = "Internal server error", body = String)
+    )
+)]
+/// Finalizes a verified registration and creates the user account.
+pub async fn post_user_register_complete(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UserRegisterCompleteBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_public_registration(&state).await?;
+    if body.totp.unwrap_or(false) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Complete registration first, then enable TOTP from security settings."
+            })),
+        ));
+    }
+
+    // Validate input
+    if let Err(errors) = body.validate() {
+        let error_messages: Vec<String> = errors
+            .field_errors()
+            .iter()
+            .flat_map(|(field, errors)| {
+                errors.iter().map(move |e| {
+                    e.message
+                        .clone()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| format!("Invalid {}", field))
+                })
+            })
+            .collect();
+        let error_message = error_messages.join(", ");
+        error!("Register complete validation failed: {}", error_message);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": error_message })),
+        ));
+    }
+
+    // Check both unique registration identifiers, including disabled accounts.
+    let existence = check_user_exists_in_db(&state.database, &body.email, &body.username)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Database error: {e}") })),
+            )
+        })?;
+    if existence.email {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Email already exists." })),
+        ));
+    }
+    if existence.username {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Username already exists." })),
+        ));
+    }
+
+    // Fetch pending registration
+    let pending = match fetch_pending_registration_by_email(&state.database, &body.email).await {
+        Ok(Some(pending)) => pending,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Pending registration not found." })),
+            ))
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Database error." })),
+            ))
+        }
+    };
+
+    if pending.verified_at.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Email not verified." })),
+        ));
+    }
+
+    if pending.completion_token.as_deref() != Some(body.completion_token.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid completion token." })),
+        ));
+    }
+
+    if pending.completion_expires_at.is_none()
+        || Utc::now() > pending.completion_expires_at.unwrap()
+    {
+        return Err((
+            StatusCode::GONE,
+            Json(json!({ "error": "Completion token expired." })),
+        ));
+    }
+
+    // Hash password and create user
+    let hashed_password = hash_password(&body.password).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to hash password." })),
+        )
+    })?;
+
+    insert_user_into_db(
+        &state.database,
+        &body.username,
+        &body.email,
+        &hashed_password,
+        None,
+        1,
+        1,
+    )
+    .await
+    .map_err(|error| {
+        if matches!(&error, sqlx::Error::Database(db) if db.is_unique_violation()) {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "Email or username already exists." })),
+            )
+        } else {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to create user." })),
+            )
+        }
+    })?;
+
+    // Cleanup pending registration
+    delete_pending_registration(&state.database, &body.email)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to cleanup pending registration." })),
+            )
+        })?;
+
+    issue_login_response(&body.email)
+}

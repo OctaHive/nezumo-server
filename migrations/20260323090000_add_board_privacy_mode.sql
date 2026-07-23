@@ -1,0 +1,2 @@
+ALTER TABLE boards
+    ADD COLUMN privacy_mode BOOLEAN NOT NULL DEFAULT false;

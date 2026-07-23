@@ -1,0 +1,75 @@
+services:
+  nezumo-dev:
+    image: rust:alpine
+    working_dir: /app
+    command: >
+      sh -c "apk add --no-cache pkgconfig openssl-dev openssl-libs-static build-base curl git &&
+             cargo install cargo-watch --locked &&
+             cargo install sqlx-cli --no-default-features --features postgres &&
+             sqlx migrate run &&
+             cargo watch -x run"
+    volumes:
+      - ..:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target:/app/target
+    ports:
+      - "${SERVER_PORT:-3000}:${SERVER_PORT:-3000}"
+    environment:
+      - SERVER_IP=0.0.0.0
+      - SERVER_PORT=${SERVER_PORT:-3000}
+      - DATABASE_URL=${DATABASE_URL:-postgres://dbuser:1234@db:5432/nezumo}
+      - SQLX_OFFLINE=false
+      - RUST_BACKTRACE=1
+      - RUST_LOG=debug,tower_http=debug
+      - CACHE_ENDPOINT=${CACHE_ENDPOINT:-cache}
+      - CACHE_PORT=${CACHE_PORT:-6379}
+      - CACHE_USERNAME=${CACHE_USERNAME:-}
+      - CACHE_PASSWORD=${CACHE_PASSWORD:-}
+      - CACHE_DB=${CACHE_DB:-0}
+      - STORAGE_HOST=${STORAGE_HOST:-http://storage}
+      - STORAGE_PORT=${STORAGE_PORT:-9000}
+      - STORAGE_REGION=${STORAGE_REGION:-us-east-1}
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadmin}
+      - PREVIEW_JOB_INTERVAL_SECS=${PREVIEW_JOB_INTERVAL_SECS:-60}
+      - PREVIEW_JOB_BATCH_LIMIT=${PREVIEW_JOB_BATCH_LIMIT:-10}
+      - PREVIEW_INTERVAL_SECS=${PREVIEW_INTERVAL_SECS:-3600}
+      - MAIL_SERVER=mailpit
+      - MAIL_PORT=1025
+      - MAIL_SECURITY=none
+      - MAIL_USER=
+      - MAIL_PASS=
+      - MAIL_FROM=no-reply@local.test
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+
+  # Reuse other services from the main compose file
+  db:
+    extends:
+      file: compose.yml
+      service: db
+  storage:
+    extends:
+      file: compose.yml
+      service: storage
+  cache:
+    extends:
+      file: compose.yml
+      service: cache
+  mailpit:
+    extends:
+      file: compose.yml
+      service: mailpit
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  target:

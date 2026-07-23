@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE boards\n        SET\n            grid_type = COALESCE($2, grid_type),\n            background_color = COALESCE($3, background_color),\n            privacy_mode = COALESCE($4, privacy_mode),\n            sticker_authors = COALESCE($5, sticker_authors)\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c3d20cb20eff1a8efb1c88ff01a8802b59e8b5febfbd32b282b81523ac28c50"
+}

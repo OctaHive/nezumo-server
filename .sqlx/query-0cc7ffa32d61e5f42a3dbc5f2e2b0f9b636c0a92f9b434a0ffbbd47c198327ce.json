@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM pending_registrations WHERE email = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0cc7ffa32d61e5f42a3dbc5f2e2b0f9b636c0a92f9b434a0ffbbd47c198327ce"
+}
