@@ -302,8 +302,9 @@ services. Start the relevant Compose dependencies before exercising them.
 ## Continuous integration and releases
 
 GitHub Actions runs formatting checks and tests for every pushed commit and
-pull request. Tags named `release` or beginning with `release-` build a Linux
-release package and deploy it to a configured production server over SSH.
+pull request. A SemVer tag such as `v0.1.0`, matching the version in
+`Cargo.toml`, builds a versioned Linux release package and deploys it to a
+configured production server over SSH.
 
 See [GitHub Actions deployment](documentation/github_actions_deployment.md) for
 the required GitHub secrets, one-time systemd setup, atomic deployment, and

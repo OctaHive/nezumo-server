@@ -3,8 +3,7 @@ name: Release backend
 on:
   push:
     tags:
-      - release
-      - release-*
+      - v*
 
 permissions:
   contents: read
@@ -38,6 +37,22 @@ jobs:
       - name: Cache Rust build files
         uses: Swatinem/rust-cache@v2
 
+      - name: Validate tag against Cargo package version
+        id: version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cargo_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          expected_tag="v${cargo_version}"
+
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "::error::Release tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${cargo_version}; expected ${expected_tag}"
+            exit 1
+          fi
+
+          echo "version=${cargo_version}" >> "${GITHUB_OUTPUT}"
+
       - name: Run tests
         run: cargo test --locked
 
@@ -47,11 +62,12 @@ jobs:
       - name: Create deployment package
         id: package
         shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -Eeuo pipefail
 
-          release_name="${GITHUB_REF_NAME}-${GITHUB_SHA::12}"
-          archive_name="nezumo-${release_name}-x86_64-unknown-linux-gnu.tar.gz"
+          archive_name="nezumo-${PACKAGE_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           package_dir="$(mktemp -d)"
           chmod 0755 "${package_dir}"
 
@@ -60,19 +76,18 @@ jobs:
           cp -a fonts "${package_dir}/fonts"
           install -d "${package_dir}/templates/mail"
           install -m 0644 src/mail/footer.html "${package_dir}/templates/mail/footer.html"
-          printf '%s\n' "${GITHUB_REF_NAME}" > "${package_dir}/VERSION"
+          printf '%s\n' "${PACKAGE_VERSION}" > "${package_dir}/VERSION"
           printf '%s\n' "${GITHUB_SHA}" > "${package_dir}/REVISION"
 
           tar -C "${package_dir}" -czf "${archive_name}" .
           sha256sum "${archive_name}" > "${archive_name}.sha256"
 
           echo "archive_name=${archive_name}" >> "${GITHUB_OUTPUT}"
-          echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Store release package
         uses: actions/upload-artifact@v4
         with:
-          name: nezumo-${{ steps.package.outputs.release_name }}
+          name: nezumo-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu
           path: |
             ${{ steps.package.outputs.archive_name }}
             ${{ steps.package.outputs.archive_name }}.sha256
@@ -102,7 +117,7 @@ jobs:
       - name: Download release package
         uses: actions/download-artifact@v4
         with:
-          pattern: nezumo-*
+          pattern: nezumo-*-x86_64-unknown-linux-gnu
           merge-multiple: true
           path: release
 
@@ -157,7 +172,7 @@ jobs:
 
           deploy_path_b64="$(printf '%s' "${DEPLOY_PATH}" | base64 -w0)"
           deploy_services_b64="$(printf '%s' "${DEPLOY_SERVICES}" | base64 -w0)"
-          release_name="${GITHUB_REF_NAME}-${GITHUB_SHA::12}"
+          release_name="${GITHUB_REF_NAME}"
           release_name_b64="$(printf '%s' "${release_name}" | base64 -w0)"
 
           # These client-side values contain only fixed paths, digits, hex, or base64.

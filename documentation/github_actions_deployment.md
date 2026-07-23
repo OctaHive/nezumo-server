@@ -5,13 +5,18 @@ The repository contains two workflows:
 - `CI` runs `cargo fmt --check` and `cargo test --locked` for every pushed
   commit and pull request;
 - `Release backend` builds an Ubuntu 24.04 x86-64 release package and deploys
-  it when a `release` or `release-*` tag is pushed.
+  it when a `v*` tag matching the package version in `Cargo.toml` is pushed.
 
-The release contains the `nezumo` binary, migrations, fonts, and the runtime
-mail template. Deployments are stored under `/opt/nezumo/releases` by default.
-The `/opt/nezumo/current` symlink is switched atomically. If a configured
-systemd service does not become active after restart, the symlink is restored
-to the previous release and the services are restarted again.
+For example, Cargo version `0.27.3` must be released with tag `v0.27.3`, and
+produces `nezumo-0.27.3-x86_64-unknown-linux-gnu.tar.gz`. The commit SHA remains
+available inside the package as `REVISION`, while `VERSION` contains the Cargo
+package version.
+
+The release also contains migrations, fonts, and the runtime mail template.
+Deployments are stored under `/opt/nezumo/releases` by default. The
+`/opt/nezumo/current` symlink is switched atomically. If a configured systemd
+service does not become active after restart, the symlink is restored to the
+previous release and the services are restarted again.
 
 ## One-time server setup
 
@@ -91,14 +96,16 @@ When multiple units are listed in `DEPLOY_SERVICES`, allow the exact combined
 
 ## Creating a release
 
-Use immutable release tags so every deployment has a unique name:
+First update the package version in `Cargo.toml` and `Cargo.lock`. Then create
+the matching immutable tag. The current repository version is `0.1.0`, so its
+release command is:
 
 ```bash
-git tag release-2026.07.23
-git push origin release-2026.07.23
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-The literal tag `release` is also accepted, but moving and force-pushing a
-reused tag is discouraged. The workflow keeps the package as a GitHub Actions
-artifact for 30 days. Previous server releases are retained, allowing a manual
-rollback by repointing `/opt/nezumo/current` and restarting the service.
+If the tag and Cargo version differ, the release job stops before tests, build,
+or deployment. The workflow keeps the package as a GitHub Actions artifact for
+30 days. Previous server releases are retained, allowing a manual rollback by
+repointing `/opt/nezumo/current` and restarting the service.
