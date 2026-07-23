@@ -28,4 +28,7 @@ route("/apikeys/:id", delete(delete_apikey_by_id))
 Ensure new handlers are well-documented, include proper error handling, and maintain compatibility with existing routes.
 
 ## License
-This project is licensed under the MIT License.
+
+This project is available under the
+[GNU Affero General Public License v3.0 only](../../LICENSE), or under a
+separately negotiated [commercial license](../../COMMERCIAL-LICENSE.md).

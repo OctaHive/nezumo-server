@@ -312,3 +312,17 @@ multi-replica deployment every backend instance starts its own job loops; see
 
 Logs use `tracing`; configure verbosity with `RUST_LOG`. Avoid logging tokens,
 SMTP credentials, signed storage URLs, verification codes, or uploaded content.
+
+## License
+
+Copyright © 2026 Roman Efremenko.
+
+Nezumo backend is available under either:
+
+- the [GNU Affero General Public License v3.0 only](LICENSE); or
+- a separately negotiated [commercial license](COMMERCIAL-LICENSE.md).
+
+The AGPL option permits commercial use when all of its conditions are met,
+including the source-code obligations for modified versions offered over a
+network. The commercial license is intended for proprietary use under
+alternative terms. Contact [admin@nezumo.ru](mailto:admin@nezumo.ru).

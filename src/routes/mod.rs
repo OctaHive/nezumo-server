@@ -106,8 +106,8 @@ impl Modify for SecurityAddon {
             url = "https://github.com/OctaHive/nezumo-server"
         ),
         license(
-            name = "MIT",
-            url = "https://opensource.org/licenses/MIT"
+            name = "AGPL-3.0-only",
+            url = "https://www.gnu.org/licenses/agpl-3.0.html"
         )
     ),
     paths(

@@ -6,6 +6,8 @@ path = "src/main.rs"
 name = "Nezumo"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/OctaHive/nezumo-server"
 
 [dependencies]
 # Web framework and server
