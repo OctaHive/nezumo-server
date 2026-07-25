@@ -1,4 +1,6 @@
 .env
+/.env.deploy
+/dist
 /target
 cert.pem
 key.pem

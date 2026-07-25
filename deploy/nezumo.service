@@ -10,7 +10,7 @@ Group=nezumo
 WorkingDirectory=/opt/nezumo/current
 Environment=RUST_LOG=info
 EnvironmentFile=/etc/nezumo/nezumo.env
-ExecStart=/opt/nezumo/current/nezumo
+ExecStart=/opt/nezumo/bin/nezumo
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

@@ -308,7 +308,10 @@ configured production server over SSH.
 
 See [GitHub Actions deployment](documentation/github_actions_deployment.md) for
 the required GitHub secrets, one-time systemd setup, atomic deployment, and
-rollback behaviour.
+rollback behaviour. The same guide describes local Linux package builds and
+manual deployment without creating a tag or publishing a GitHub release.
+Production deployment compares and applies pending SQLx migrations before
+activating the new binary.
 
 ## Runtime model
 

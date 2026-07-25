@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1.96-bookworm AS builder
+
+ARG TARGETARCH
+ARG PACKAGE_VERSION
+ARG SOURCE_REVISION=manual
+
+RUN test "${TARGETARCH}" = "amd64"
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+      build-essential \
+      clang \
+      cmake \
+      libssl-dev \
+      ninja-build \
+      pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY .sqlx .sqlx/
+COPY migrations migrations/
+COPY src src/
+COPY fonts fonts/
+
+ENV SQLX_OFFLINE=true
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked \
+    && install -d -m 0755 /package/templates/mail \
+    && install -m 0755 /app/target/release/nezumo /package/nezumo \
+    && cp -a /app/migrations /package/migrations \
+    && cp -a /app/fonts /package/fonts \
+    && install -m 0644 /app/src/mail/footer.html /package/templates/mail/footer.html \
+    && printf '%s\n' "${PACKAGE_VERSION}" > /package/VERSION \
+    && printf '%s\n' "${SOURCE_REVISION}" > /package/REVISION \
+    && archive="nezumo-${PACKAGE_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+    && install -d -m 0755 /out \
+    && tar -C /package -czf "/out/${archive}" . \
+    && cd /out \
+    && sha256sum "${archive}" > "${archive}.sha256"
+
+FROM scratch AS artifact
+
+COPY --from=builder /out/ /

@@ -106,9 +106,16 @@ jobs:
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      DEPLOY_DATABASE_URL: ${{ secrets.DEPLOY_DATABASE_URL }}
       DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/nezumo' }}
       DEPLOY_SERVICES: ${{ vars.DEPLOY_SERVICES || 'nezumo.service' }}
+      DEPLOY_BINARY_PATH: ${{ vars.DEPLOY_BINARY_PATH || '/opt/nezumo/bin/nezumo' }}
+      DEPLOY_OWNER: ${{ vars.DEPLOY_OWNER || 'nezumo' }}
+      DEPLOY_GROUP: ${{ vars.DEPLOY_GROUP || 'nezumo' }}
+      DEPLOY_BINARY_MODE: ${{ vars.DEPLOY_BINARY_MODE || '0755' }}
+      DEPLOY_MIGRATIONS: ${{ vars.DEPLOY_MIGRATIONS || 'auto' }}
+      DEPLOY_SQLX_BIN: ${{ vars.DEPLOY_SQLX_BIN || 'sqlx' }}
 
     steps:
       - name: Check out deployment script
@@ -144,6 +151,19 @@ jobs:
           printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
           chmod 0644 "${HOME}/.ssh/known_hosts"
 
+      - name: Install local SQLx CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "${DEPLOY_MIGRATIONS}" == auto ]] && ! command -v "${DEPLOY_SQLX_BIN}" >/dev/null 2>&1; then
+            cargo install sqlx-cli \
+              --version 0.8.6 \
+              --locked \
+              --no-default-features \
+              --features postgres
+          fi
+
       - name: Verify and deploy package
         shell: bash
         run: |
@@ -163,20 +183,8 @@ jobs:
             exit 1
           fi
 
-          remote_archive="/tmp/nezumo-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
-          target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh_options=(-i "${HOME}/.ssh/deploy_key" -p "${DEPLOY_PORT}" -o BatchMode=yes)
-
-          scp -i "${HOME}/.ssh/deploy_key" -P "${DEPLOY_PORT}" -o BatchMode=yes \
-            "${archive}" "${target}:${remote_archive}"
-
-          deploy_path_b64="$(printf '%s' "${DEPLOY_PATH}" | base64 -w0)"
-          deploy_services_b64="$(printf '%s' "${DEPLOY_SERVICES}" | base64 -w0)"
-          release_name="${GITHUB_REF_NAME}"
-          release_name_b64="$(printf '%s' "${release_name}" | base64 -w0)"
-
-          # These client-side values contain only fixed paths, digits, hex, or base64.
-          # shellcheck disable=SC2029
-          ssh "${ssh_options[@]}" "${target}" \
-            "bash -s -- '${remote_archive}' '${deploy_path_b64}' '${deploy_services_b64}' '${release_name_b64}' '${archive_sha}'" \
-            < scripts/deploy-release.sh
+          export DEPLOY_ARCHIVE="${archive}"
+          export DEPLOY_RELEASE_NAME="${GITHUB_REF_NAME}"
+          export DEPLOY_SSH_KEY="${HOME}/.ssh/deploy_key"
+          export DEPLOY_KNOWN_HOSTS="${HOME}/.ssh/known_hosts"
+          ./scripts/manual-deploy.sh

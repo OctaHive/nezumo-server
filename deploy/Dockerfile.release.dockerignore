@@ -1,0 +1,13 @@
+**/.DS_Store
+**/.env
+**/.git
+**/.gitignore
+**/.idea
+**/.vscode
+**/Dockerfile*
+**/node_modules
+/dist
+/target
+/docker/db
+/docker/cache
+/docker/storage
