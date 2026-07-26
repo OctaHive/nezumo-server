@@ -18,7 +18,9 @@ use crate::database::board_members::get_member_role;
 use crate::database::boards::get_board_by_id;
 use crate::database::events::{list_events_by_user_session, list_events_since, min_event_seq};
 use crate::database::snapshots::{fetch_latest_snapshot, insert_snapshot};
-use crate::models::events::{CommitEventBody, CommitEventResponse, SnapshotCreateBody};
+use crate::models::events::{
+    CommitEventBody, CommitEventResponse, LatestSnapshotResponse, SnapshotCreateBody,
+};
 use crate::models::user::User;
 use crate::routes::AppState;
 
@@ -585,8 +587,7 @@ pub async fn get_events_since(
     params(("board_id" = String, Path, description = "Board ID")),
     security(("jwt_token" = [])),
     responses(
-        (status = 200, description = "Snapshot", body = crate::models::events::SnapshotRecord),
-        (status = 404, description = "Not found"),
+        (status = 200, description = "Snapshot or empty baseline", body = crate::models::events::LatestSnapshotResponse),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -607,42 +608,40 @@ pub async fn get_latest_snapshot(
     let embed_token = crate::handlers::board_embed::embed_token_from_headers(&headers);
     ensure_board_access(&state, board_id, user, embed_token.as_deref()).await?;
 
-    match fetch_latest_snapshot(&state.database, board_id).await {
-        Ok(Some(snapshot)) => {
-            // The snapshot `seq` is a monotonic version → use it as an ETag so
-            // clients can cache the body and skip re-downloading it unchanged.
-            let etag = format!("\"snap-{}\"", snapshot.seq);
-            let unchanged = headers
-                .get(axum::http::header::IF_NONE_MATCH)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v == etag)
-                .unwrap_or(false);
-            if unchanged {
-                return Ok(
-                    (StatusCode::NOT_MODIFIED, [(axum::http::header::ETAG, etag)]).into_response(),
-                );
-            }
-            Ok((
-                [
-                    (axum::http::header::ETAG, etag),
-                    (
-                        axum::http::header::CACHE_CONTROL,
-                        "no-cache, private".to_string(),
-                    ),
-                ],
-                Json(snapshot),
+    let snapshot = fetch_latest_snapshot(&state.database, board_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Could not fetch snapshot." })),
             )
-                .into_response())
-        }
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Snapshot not found." })),
-        )),
-        Err(_) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "Could not fetch snapshot." })),
-        )),
+        })?;
+    let snapshot = snapshot
+        .map(LatestSnapshotResponse::from)
+        .unwrap_or_else(|| LatestSnapshotResponse::empty(board_id));
+
+    // The snapshot `seq` is a monotonic version → use it as an ETag so clients
+    // can cache both real snapshots and the empty seq-0 baseline.
+    let etag = format!("\"snap-{}\"", snapshot.seq);
+    let unchanged = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == etag)
+        .unwrap_or(false);
+    if unchanged {
+        return Ok((StatusCode::NOT_MODIFIED, [(axum::http::header::ETAG, etag)]).into_response());
     }
+    Ok((
+        [
+            (axum::http::header::ETAG, etag),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "no-cache, private".to_string(),
+            ),
+        ],
+        Json(snapshot),
+    )
+        .into_response())
 }
 
 #[utoipa::path(

@@ -45,8 +45,60 @@ pub struct SnapshotRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Latest legacy snapshot response. A board with no materialized snapshot has
+/// a valid empty baseline (`seq = 0`) instead of an exceptional HTTP 404.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LatestSnapshotResponse {
+    pub id: Option<Uuid>,
+    pub board_id: Uuid,
+    pub seq: i64,
+    pub state: serde_json::Value,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+impl LatestSnapshotResponse {
+    pub fn empty(board_id: Uuid) -> Self {
+        Self {
+            id: None,
+            board_id,
+            seq: 0,
+            state: serde_json::json!({ "entities": [] }),
+            created_at: None,
+        }
+    }
+}
+
+impl From<SnapshotRecord> for LatestSnapshotResponse {
+    fn from(snapshot: SnapshotRecord) -> Self {
+        Self {
+            id: Some(snapshot.id),
+            board_id: snapshot.board_id,
+            seq: snapshot.seq,
+            state: snapshot.state,
+            created_at: Some(snapshot.created_at),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct SnapshotCreateBody {
     pub seq: i64,
     pub state: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LatestSnapshotResponse;
+    use uuid::Uuid;
+
+    #[test]
+    fn empty_latest_snapshot_is_a_valid_zero_baseline() {
+        let board_id = Uuid::new_v4();
+        let snapshot = LatestSnapshotResponse::empty(board_id);
+        assert_eq!(snapshot.board_id, board_id);
+        assert_eq!(snapshot.seq, 0);
+        assert_eq!(snapshot.state, serde_json::json!({ "entities": [] }));
+        assert!(snapshot.id.is_none());
+        assert!(snapshot.created_at.is_none());
+    }
 }

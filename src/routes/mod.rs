@@ -226,6 +226,7 @@ impl Modify for SecurityAddon {
             models::events::CommitEventResponse,
             models::events::EventRecord,
             models::events::SnapshotRecord,
+            models::events::LatestSnapshotResponse,
             models::events::SnapshotCreateBody
         )
     ),
