@@ -717,7 +717,7 @@ fn build_body(
     let mut s = String::new();
 
     let reporter = match user {
-        Some(u) => format!("{} (`{}`)", u.email, u.id),
+        Some(u) => format!("{} (`{}`)", u.email.as_deref().unwrap_or(&u.username), u.id),
         None => "anonymous".to_string(),
     };
     s.push_str(&format!("**Reporter:** {reporter}\n"));

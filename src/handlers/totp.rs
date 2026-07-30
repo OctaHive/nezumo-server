@@ -152,7 +152,11 @@ pub async fn setup_totp(
     }
 
     let secret = generate_totp_secret();
-    let provisioning_uri = totp_provisioning_uri(&current_user.email, &secret).map_err(|_| {
+    let account_label = current_user
+        .email
+        .as_deref()
+        .unwrap_or(&current_user.username);
+    let provisioning_uri = totp_provisioning_uri(account_label, &secret).map_err(|_| {
         api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Could not start TOTP setup.",

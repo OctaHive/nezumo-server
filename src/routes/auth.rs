@@ -7,7 +7,10 @@ use std::sync::Arc;
 use crate::handlers::{
     login::{login, login_totp},
     logout::logout,
-    oauth::{oauth_google, oauth_google_callback, oauth_google_exchange},
+    oauth::{
+        oauth_google, oauth_google_callback, oauth_google_exchange, oauth_vk, oauth_vk_callback,
+        oauth_yandex, oauth_yandex_callback,
+    },
     protected::protected,
 };
 use crate::wrappers::authentication_route_builder::AuthenticatedRouteBuilder;
@@ -21,6 +24,10 @@ pub fn create_auth_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .unauthenticated_get("/oauth/google", oauth_google)
         .unauthenticated_get("/oauth/google/callback", oauth_google_callback)
         .unauthenticated_post("/oauth/google/exchange", oauth_google_exchange)
+        .unauthenticated_get("/oauth/yandex", oauth_yandex)
+        .unauthenticated_get("/oauth/yandex/callback", oauth_yandex_callback)
+        .unauthenticated_get("/oauth/vk", oauth_vk)
+        .unauthenticated_get("/oauth/vk/callback", oauth_vk_callback)
         .get("/me", protected, vec![1, 2])
         .build()
 }

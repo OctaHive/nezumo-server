@@ -20,7 +20,7 @@ use crate::utils::validate::{
 pub struct UserRow {
     pub id: Uuid,
     pub username: String,
-    pub email: String,
+    pub email: Option<String>,
     pub role_level: i32,
     pub tier_level: i32,
     pub status: String,
@@ -53,11 +53,11 @@ pub struct PendingRegistrationRow {
 }
 
 /// Internal domain model (non-SQLx)
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, FromRow)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
-    pub email: String,
+    pub email: Option<String>,
     pub role_level: i32,
     pub tier_level: i32,
     pub status: String,
@@ -76,11 +76,11 @@ pub struct User {
 }
 
 /// Public user response
-#[derive(Debug, Serialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Clone, ToSchema, FromRow)]
 pub struct UserGetResponse {
     pub id: Uuid,
     pub username: String,
-    pub email: String,
+    pub email: Option<String>,
     pub role_level: i32,
     pub tier_level: i32,
     pub status: String,
@@ -131,11 +131,11 @@ pub struct UserInsertBody {
 }
 
 /// Response for user creation
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, FromRow)]
 pub struct UserInsertResponse {
     pub id: Uuid,
     pub username: String,
-    pub email: String,
+    pub email: Option<String>,
     pub role_level: i32,
     pub tier_level: i32,
     pub creation_date: NaiveDateTime,
@@ -372,11 +372,26 @@ pub struct UserRegisterVerifyResponse {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct UserEmailAddBody {
+    #[validate(email)]
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct UserEmailVerifyBody {
+    #[validate(email)]
+    pub email: String,
+    #[validate(length(min = 6, max = 6))]
+    pub code: String,
+}
+
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct UserSearchResult {
     pub id: Uuid,
     pub username: String,
-    pub email: String,
+    pub display_name: String,
+    pub email: Option<String>,
     pub profile_picture_url: Option<String>,
 }
 

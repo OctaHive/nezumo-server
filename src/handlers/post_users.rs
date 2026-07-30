@@ -24,15 +24,16 @@ use crate::database::users::{
     fetch_pending_registration_by_email, fetch_profile_picture_url_from_db,
     fetch_user_by_email_from_db, insert_user_into_db, insert_user_password_reset_code_into_db,
     mark_pending_registration_verified, update_user_password_in_db,
-    update_user_profile_picture_in_db, upsert_pending_registration,
+    update_user_profile_picture_in_db, upsert_pending_registration, upsert_user_email_verification,
+    verify_and_set_user_email,
 };
 use crate::handlers::login::issue_login_response;
 use crate::mail::send::send_mail;
 use crate::models::user::{
-    User, UserInsertBody, UserInsertResponse, UserPasswordResetConfirmBody,
-    UserPasswordResetRequestBody, UserProfilePictureUploadBody, UserProfilePictureUploadResponse,
-    UserRegisterBody, UserRegisterCompleteBody, UserRegisterEmailVerifyBody,
-    UserRegisterVerifyResponse,
+    User, UserEmailAddBody, UserEmailVerifyBody, UserInsertBody, UserInsertResponse,
+    UserPasswordResetConfirmBody, UserPasswordResetRequestBody, UserProfilePictureUploadBody,
+    UserProfilePictureUploadResponse, UserRegisterBody, UserRegisterCompleteBody,
+    UserRegisterEmailVerifyBody, UserRegisterVerifyResponse,
 };
 use crate::routes::AppState;
 use crate::storage::delete::delete_from_storage;
@@ -66,6 +67,150 @@ async fn require_public_registration(
         ));
     }
     Ok(())
+}
+
+#[utoipa::path(
+    post,
+    path = "/users/current/email",
+    tag = "user",
+    security(("jwt_token" = [])),
+    request_body = UserEmailAddBody,
+    responses(
+        (status = 200, description = "Verification code sent"),
+        (status = 400, description = "Invalid email"),
+        (status = 409, description = "Account already has an email or email is in use")
+    )
+)]
+#[instrument(skip(state, current_user, body))]
+pub async fn request_current_user_email(
+    State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<User>,
+    Json(body): Json<UserEmailAddBody>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    if current_user.email.is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Account already has an email." })),
+        ));
+    }
+    if let Err(errors) = body.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": errors.to_string() })),
+        ));
+    }
+
+    let email = body.email.trim().to_lowercase();
+    if check_user_exists_by_email(&state.database, &email)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Could not check email availability." })),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Email already exists." })),
+        ));
+    }
+
+    let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
+    upsert_user_email_verification(
+        &state.database,
+        current_user.id,
+        &email,
+        &code,
+        Utc::now() + Duration::minutes(10),
+    )
+    .await
+    .map_err(|error| {
+        let status = if matches!(&error, sqlx::Error::Database(db) if db.is_unique_violation()) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (
+            status,
+            Json(json!({ "error": "Could not start email verification." })),
+        )
+    })?;
+
+    send_mail(
+        &state.mail,
+        &email,
+        "Verify your email",
+        &format!(
+            "Use this code to add the email to your Nezumo account: {code}\n\nThis code will expire in 10 minutes."
+        ),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to send verification email." })),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    post,
+    path = "/users/current/email/verify",
+    tag = "user",
+    security(("jwt_token" = [])),
+    request_body = UserEmailVerifyBody,
+    responses(
+        (status = 200, description = "Email added"),
+        (status = 400, description = "Invalid or expired verification code"),
+        (status = 409, description = "Account already has an email or email is in use")
+    )
+)]
+#[instrument(skip(state, current_user, body))]
+pub async fn verify_current_user_email(
+    State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<User>,
+    Json(body): Json<UserEmailVerifyBody>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    if current_user.email.is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Account already has an email." })),
+        ));
+    }
+    if let Err(errors) = body.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": errors.to_string() })),
+        ));
+    }
+
+    let updated = verify_and_set_user_email(
+        &state.database,
+        current_user.id,
+        &body.email.trim().to_lowercase(),
+        body.code.trim(),
+    )
+    .await
+    .map_err(|error| {
+        let status = if matches!(&error, sqlx::Error::Database(db) if db.is_unique_violation()) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, Json(json!({ "error": "Could not verify email." })))
+    })?;
+
+    if !updated {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid or expired verification code." })),
+        ));
+    }
+
+    Ok(StatusCode::OK)
 }
 
 // Define the API endpoint
@@ -344,6 +489,7 @@ pub async fn post_user_password_reset(
             ))
         }
     };
+    let recipient = body.email.clone();
 
     // 2. Generate code and expiry
     let code: String = rand::thread_rng()
@@ -369,7 +515,7 @@ pub async fn post_user_password_reset(
         "Use this code to reset your password: {}\n\nThis code will expire in 24 hours.",
         code
     );
-    send_mail(&state.mail, &user.email, subject, &body)
+    send_mail(&state.mail, &recipient, subject, &body)
         .await
         .map_err(|e| {
             error!("Failed to send password reset email: {}", e);
@@ -775,7 +921,7 @@ pub async fn post_user_register_complete(
         )
     })?;
 
-    insert_user_into_db(
+    let new_user = insert_user_into_db(
         &state.database,
         &body.username,
         &body.email,
@@ -809,5 +955,5 @@ pub async fn post_user_register_complete(
             )
         })?;
 
-    issue_login_response(&body.email)
+    issue_login_response(new_user.id)
 }

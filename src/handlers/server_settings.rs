@@ -25,11 +25,15 @@ type ApiError = (StatusCode, Json<serde_json::Value>);
 pub struct PublicServerSettings {
     pub public_registration_enabled: bool,
     pub google_login_enabled: bool,
+    pub yandex_login_enabled: bool,
+    pub vk_login_enabled: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct IntegrationStatus {
     pub google: bool,
+    pub yandex: bool,
+    pub vk: bool,
     pub mail: bool,
     pub github_issues: bool,
     pub storage: bool,
@@ -54,6 +58,12 @@ fn integration_status() -> IntegrationStatus {
             "GOOGLE_CLIENT_SECRET",
             "GOOGLE_REDIRECT_URL",
         ]),
+        yandex: configured(&[
+            "YANDEX_CLIENT_ID",
+            "YANDEX_CLIENT_SECRET",
+            "YANDEX_REDIRECT_URL",
+        ]),
+        vk: configured(&["VK_CLIENT_ID", "VK_REDIRECT_URL"]),
         mail: configured(&["MAIL_SERVER", "MAIL_USER", "MAIL_PASS", "MAIL_FROM"]),
         github_issues: configured(&["GITHUB_ISSUES_REPO", "GITHUB_ISSUES_TOKEN"]),
         storage: configured(&["STORAGE_HOST", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY"]),
@@ -76,6 +86,8 @@ pub async fn get_public_server_settings(
     Ok(Json(PublicServerSettings {
         public_registration_enabled: settings.public_registration_enabled,
         google_login_enabled: settings.google_login_enabled && integration_status().google,
+        yandex_login_enabled: settings.yandex_login_enabled && integration_status().yandex,
+        vk_login_enabled: settings.vk_login_enabled && integration_status().vk,
     }))
 }
 

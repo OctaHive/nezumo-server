@@ -93,7 +93,8 @@ pub struct BoardMemberWithUser {
     pub role: String,
     pub created_at: DateTime<Utc>,
     pub username: String,
-    pub email: String,
+    pub display_name: String,
+    pub email: Option<String>,
     pub profile_picture_url: Option<String>,
 }
 

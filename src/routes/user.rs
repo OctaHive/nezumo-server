@@ -14,7 +14,7 @@ use crate::handlers::{
     post_users::{
         post_user, post_user_password_reset, post_user_password_reset_verify,
         post_user_profilepicture, post_user_register, post_user_register_complete,
-        post_user_register_verify,
+        post_user_register_verify, request_current_user_email, verify_current_user_email,
     },
     preferences::{get_color_preferences, update_color_preferences_handler},
     quotas::{get_current_quota, get_tiers},
@@ -43,6 +43,12 @@ pub fn create_user_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .unauthenticated_post("/register/complete", post_user_register_complete)
         // Route for changing password (authenticated)
         .post("/current/change-password", change_password, vec![1, 2])
+        .post("/current/email", request_current_user_email, vec![1, 2])
+        .post(
+            "/current/email/verify",
+            verify_current_user_email,
+            vec![1, 2],
+        )
         // The personal quota is used for proactive UI limits. Mutating routes
         // still enforce the same policy transactionally.
         .get("/current/quota", get_current_quota, vec![1, 2])

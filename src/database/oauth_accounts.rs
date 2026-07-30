@@ -6,6 +6,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::models::user::{User, UserRow};
+
 /// Returns `true` if the user has at least one linked OAuth account.
 pub async fn user_has_oauth_account(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
     let row = sqlx::query("SELECT 1 FROM oauth_accounts WHERE user_id = $1 LIMIT 1")
@@ -14,6 +16,30 @@ pub async fn user_has_oauth_account(pool: &PgPool, user_id: Uuid) -> Result<bool
         .await?;
 
     Ok(row.is_some())
+}
+
+/// Finds the local user already linked to an external provider identity.
+pub async fn fetch_user_by_oauth_account(
+    pool: &PgPool,
+    provider: &str,
+    provider_user_id: &str,
+) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as::<_, UserRow>(
+        r#"
+        SELECT users.id, users.username, users.email, users.password_hash, users.totp_secret,
+               users.role_level, users.tier_level, users.status, users.creation_date,
+               users.profile_picture_url, users.first_name, users.last_name,
+               users.country_code, users.language_code, users.birthday, users.description
+        FROM oauth_accounts
+        JOIN users ON users.id = oauth_accounts.user_id
+        WHERE oauth_accounts.provider = $1 AND oauth_accounts.provider_user_id = $2
+        "#,
+    )
+    .bind(provider)
+    .bind(provider_user_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.map(User::from))
 }
 
 /// Inserts or refreshes the provider identity linked to a local user.

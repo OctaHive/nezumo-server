@@ -77,18 +77,22 @@ pub async fn list_board_members_with_users(
     pool: &PgPool,
     board_id: Uuid,
 ) -> Result<Vec<BoardMemberWithUser>, sqlx::Error> {
-    let rows = sqlx::query_as!(
-        BoardMemberWithUser,
+    let rows = sqlx::query_as::<_, BoardMemberWithUser>(
         r#"
         SELECT bm.board_id, bm.user_id, bm.role, bm.created_at,
-               u.username, u.email, u.profile_picture_url
+               u.username,
+               COALESCE(
+                   NULLIF(BTRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+                   u.username
+               ) AS display_name,
+               u.email, u.profile_picture_url
         FROM board_members bm
         JOIN users u ON u.id = bm.user_id
         WHERE bm.board_id = $1
         ORDER BY bm.created_at ASC
         "#,
-        board_id
     )
+    .bind(board_id)
     .fetch_all(pool)
     .await?;
 

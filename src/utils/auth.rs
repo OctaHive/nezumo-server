@@ -68,8 +68,8 @@ pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Er
 }
 
 // JWT encoding and decoding
-#[instrument(skip(email))]
-pub fn encode_jwt(email: String) -> Result<String, StatusCode> {
+#[instrument(skip(subject))]
+pub fn encode_jwt(subject: String) -> Result<String, StatusCode> {
     // Get the current time and expiration time
     let now = Utc::now();
     let expire = Duration::hours(24);
@@ -82,7 +82,7 @@ pub fn encode_jwt(email: String) -> Result<String, StatusCode> {
 
     // Create claims using the fetched issuer and audience
     let claim = Claims {
-        sub: email,
+        sub: subject,
         iat,
         exp,
         iss: issuer,   // Set the issuer from the environment

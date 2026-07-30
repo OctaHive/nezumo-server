@@ -21,12 +21,10 @@ use validator::Validate;
 /// - Limits maximum results in production (enforced at application layer)
 #[allow(dead_code)]
 pub async fn fetch_all_users_from_db(pool: &PgPool) -> Result<Vec<UserGetResponse>, sqlx::Error> {
-    sqlx::query_as!(
-        UserGetResponse,
+    sqlx::query_as::<_, UserGetResponse>(
         "SELECT id, username, email, role_level, tier_level, status, creation_date,
         profile_picture_url, first_name, last_name, country_code, language_code,
-        birthday, description
-        FROM users"
+        birthday, description FROM users",
     )
     .fetch_all(pool)
     .await
@@ -57,8 +55,7 @@ pub async fn fetch_user_by_field_from_db(
                 )))
             })?;
 
-            sqlx::query_as!(
-                UserGetResponse,
+            sqlx::query_as::<_, UserGetResponse>(
                 r#"
                 SELECT id, username, email, role_level, tier_level, status, creation_date,
                        profile_picture_url, first_name, last_name, country_code,
@@ -66,14 +63,13 @@ pub async fn fetch_user_by_field_from_db(
                 FROM users
                 WHERE id = $1
                 "#,
-                uuid
             )
+            .bind(uuid)
             .fetch_optional(pool)
             .await
         }
         "email" => {
-            sqlx::query_as!(
-                UserGetResponse,
+            sqlx::query_as::<_, UserGetResponse>(
                 r#"
                 SELECT id, username, email, role_level, tier_level, status, creation_date,
                        profile_picture_url, first_name, last_name, country_code,
@@ -81,14 +77,13 @@ pub async fn fetch_user_by_field_from_db(
                 FROM users
                 WHERE email = $1
                 "#,
-                value
             )
+            .bind(value)
             .fetch_optional(pool)
             .await
         }
         "username" => {
-            sqlx::query_as!(
-                UserGetResponse,
+            sqlx::query_as::<_, UserGetResponse>(
                 r#"
                 SELECT id, username, email, role_level, tier_level, status, creation_date,
                        profile_picture_url, first_name, last_name, country_code,
@@ -96,8 +91,8 @@ pub async fn fetch_user_by_field_from_db(
                 FROM users
                 WHERE username = $1
                 "#,
-                value
             )
+            .bind(value)
             .fetch_optional(pool)
             .await
         }
@@ -130,8 +125,7 @@ pub async fn fetch_active_user_by_field_from_db(
                 )))
             })?;
 
-            sqlx::query_as!(
-                UserGetResponse,
+            sqlx::query_as::<_, UserGetResponse>(
                 r#"
                 SELECT id, username, email, role_level, tier_level, status, creation_date,
                        profile_picture_url, first_name, last_name, country_code,
@@ -139,14 +133,13 @@ pub async fn fetch_active_user_by_field_from_db(
                 FROM users
                 WHERE id = $1 AND status = 'active'
                 "#,
-                uuid
             )
+            .bind(uuid)
             .fetch_optional(pool)
             .await
         }
         "email" => {
-            sqlx::query_as!(
-                UserGetResponse,
+            sqlx::query_as::<_, UserGetResponse>(
                 r#"
                 SELECT id, username, email, role_level, tier_level, status, creation_date,
                        profile_picture_url, first_name, last_name, country_code,
@@ -154,14 +147,13 @@ pub async fn fetch_active_user_by_field_from_db(
                 FROM users
                 WHERE email = $1 AND status = 'active'
                 "#,
-                value
             )
+            .bind(value)
             .fetch_optional(pool)
             .await
         }
         "username" => {
-            sqlx::query_as!(
-                UserGetResponse,
+            sqlx::query_as::<_, UserGetResponse>(
                 r#"
                 SELECT id, username, email, role_level, tier_level, status, creation_date,
                        profile_picture_url, first_name, last_name, country_code,
@@ -169,8 +161,8 @@ pub async fn fetch_active_user_by_field_from_db(
                 FROM users
                 WHERE username = $1 AND status = 'active'
                 "#,
-                value
             )
+            .bind(value)
             .fetch_optional(pool)
             .await
         }
@@ -187,15 +179,14 @@ pub async fn fetch_user_by_email_from_db(
     pool: &PgPool,
     email: &str,
 ) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as!(
-        User,
+    sqlx::query_as::<_, User>(
         r#"SELECT id, username, email, password_hash, totp_secret,
            role_level, tier_level, status, creation_date, profile_picture_url,
            first_name, last_name, country_code, language_code,
            birthday, description
            FROM users WHERE email = $1"#,
-        email
     )
+    .bind(email)
     .fetch_optional(pool)
     .await
 }
@@ -209,16 +200,15 @@ pub async fn fetch_active_user_by_email_from_db(
     pool: &PgPool,
     email: &str,
 ) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as!(
-        User,
+    sqlx::query_as::<_, User>(
         r#"SELECT id, username, email, password_hash, totp_secret,
            role_level, tier_level, status, creation_date, profile_picture_url,
            first_name, last_name, country_code, language_code,
            birthday, description
            FROM users
            WHERE email = $1 AND status = 'active'"#,
-        email
     )
+    .bind(email)
     .fetch_optional(pool)
     .await
 }
@@ -277,16 +267,15 @@ pub async fn fetch_active_user_by_id_from_db(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as!(
-        User,
+    sqlx::query_as::<_, User>(
         r#"SELECT id, username, email, password_hash, totp_secret,
            role_level, tier_level, status, creation_date, profile_picture_url,
            first_name, last_name, country_code, language_code,
            birthday, description
            FROM users
            WHERE id = $1 AND status = 'active'"#,
-        user_id
     )
+    .bind(user_id)
     .fetch_optional(pool)
     .await
 }
@@ -373,25 +362,169 @@ pub async fn insert_user_into_db(
     }
 
     // Insert user into database
-    let row = sqlx::query_as!(
-        UserInsertResponse,
+    let row = sqlx::query_as::<_, UserInsertResponse>(
         r#"INSERT INTO users
            (username, email, password_hash, totp_secret, role_level, tier_level, creation_date)
            VALUES ($1, $2, $3, $4, $5, $6, NOW()::timestamp)
            RETURNING id, username, email, totp_secret, role_level, tier_level, creation_date,
                      first_name, last_name, country_code, language_code, birthday, description,
                      profile_picture_url"#,
-        username,
-        email,
-        password_hash,
-        totp_secret,
-        role_level,
-        tier_level,
     )
+    .bind(username)
+    .bind(email)
+    .bind(password_hash)
+    .bind(totp_secret)
+    .bind(role_level)
+    .bind(tier_level)
     .fetch_one(pool)
     .await?;
 
     Ok(row)
+}
+
+/// Creates a user whose primary identity is an OAuth account.
+///
+/// Email is optional because some providers and accounts do not expose one.
+pub async fn insert_oauth_user_into_db(
+    pool: &PgPool,
+    username: &str,
+    email: Option<&str>,
+    password_hash: &str,
+) -> Result<User, Error> {
+    let username = username.trim();
+    if username.len() < 3 || username.len() > 30 {
+        return Err(Error::Protocol(
+            "Username must be between 3 and 30 characters.".into(),
+        ));
+    }
+    if !username.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(Error::Protocol(
+            "Invalid username format: only alphanumeric and underscores allowed.".into(),
+        ));
+    }
+
+    let email = email.map(|value| value.trim().to_lowercase());
+    if email.as_deref().is_some_and(|value| !is_valid_email(value)) {
+        return Err(Error::Protocol("Invalid email format.".into()));
+    }
+
+    let user_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO users (username, email, password_hash, role_level, tier_level, creation_date)
+        VALUES ($1, $2, $3, 1, 1, NOW()::timestamp)
+        RETURNING id
+        "#,
+    )
+    .bind(username)
+    .bind(email)
+    .bind(password_hash)
+    .fetch_one(pool)
+    .await?;
+
+    fetch_active_user_by_id_from_db(pool, user_id)
+        .await?
+        .ok_or_else(|| Error::RowNotFound)
+}
+
+pub async fn fill_missing_oauth_profile_names(
+    pool: &PgPool,
+    user_id: Uuid,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+) -> Result<(), Error> {
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET first_name = COALESCE(first_name, $2),
+            last_name = COALESCE(last_name, $3)
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .bind(first_name)
+    .bind(last_name)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_user_email_verification(
+    pool: &PgPool,
+    user_id: Uuid,
+    email: &str,
+    verification_code: &str,
+    expires_at: DateTime<Utc>,
+) -> Result<(), Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_email_verifications (user_id, email, verification_code, expires_at)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+            email = EXCLUDED.email,
+            verification_code = EXCLUDED.verification_code,
+            expires_at = EXCLUDED.expires_at,
+            created_at = NOW()
+        "#,
+    )
+    .bind(user_id)
+    .bind(email)
+    .bind(verification_code)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn verify_and_set_user_email(
+    pool: &PgPool,
+    user_id: Uuid,
+    email: &str,
+    verification_code: &str,
+) -> Result<bool, Error> {
+    let mut transaction = pool.begin().await?;
+    let verification_exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM user_email_verifications
+            WHERE user_id = $1
+              AND email = $2
+              AND verification_code = $3
+              AND expires_at > NOW()
+        )
+        "#,
+    )
+    .bind(user_id)
+    .bind(email)
+    .bind(verification_code)
+    .fetch_one(&mut *transaction)
+    .await?;
+
+    if !verification_exists {
+        transaction.rollback().await?;
+        return Ok(false);
+    }
+
+    let updated = sqlx::query("UPDATE users SET email = $2 WHERE id = $1 AND email IS NULL")
+        .bind(user_id)
+        .bind(email)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+        == 1;
+
+    if updated {
+        sqlx::query("DELETE FROM user_email_verifications WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+    } else {
+        transaction.rollback().await?;
+    }
+
+    Ok(updated)
 }
 
 /// Inserts or refreshes a pending registration record.
@@ -587,17 +720,21 @@ pub async fn search_users(
     limit: i64,
 ) -> Result<Vec<crate::models::user::UserSearchResult>, sqlx::Error> {
     let pattern = format!("%{}%", query);
-    sqlx::query_as!(
-        crate::models::user::UserSearchResult,
+    sqlx::query_as::<_, crate::models::user::UserSearchResult>(
         r#"
-        SELECT id, username, email, profile_picture_url
+        SELECT id, username,
+               COALESCE(
+                   NULLIF(BTRIM(CONCAT_WS(' ', first_name, last_name)), ''),
+                   username
+               ) AS display_name,
+               email, profile_picture_url
         FROM users
         WHERE (username ILIKE $1 OR email ILIKE $1) AND status = 'active'
         LIMIT $2
         "#,
-        pattern,
-        limit
     )
+    .bind(pattern)
+    .bind(limit)
     .fetch_all(pool)
     .await
 }
@@ -988,4 +1125,5 @@ mod tests {
             .await
             .expect("delete test user");
     }
+
 }

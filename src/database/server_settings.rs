@@ -13,6 +13,8 @@ use crate::database::quotas::TierQuota;
 
 const PUBLIC_REGISTRATION_ENABLED: &str = "public_registration_enabled";
 const GOOGLE_LOGIN_ENABLED: &str = "google_login_enabled";
+const YANDEX_LOGIN_ENABLED: &str = "yandex_login_enabled";
+const VK_LOGIN_ENABLED: &str = "vk_login_enabled";
 const SUPPORT_MAX_REPORTS_PER_DAY: &str = "support_max_reports_per_day";
 const FEATURE_REQUEST_MAX_PER_DAY: &str = "feature_request_max_per_day";
 const FEATURE_REQUEST_EXPOSE_ISSUE_URL: &str = "feature_request_expose_issue_url";
@@ -21,6 +23,8 @@ const FEATURE_REQUEST_EXPOSE_ISSUE_URL: &str = "feature_request_expose_issue_url
 pub struct ServerSettings {
     pub public_registration_enabled: bool,
     pub google_login_enabled: bool,
+    pub yandex_login_enabled: bool,
+    pub vk_login_enabled: bool,
     pub support_max_reports_per_day: i64,
     pub feature_request_max_per_day: i64,
     pub feature_request_expose_issue_url: bool,
@@ -30,6 +34,8 @@ pub struct ServerSettings {
 pub struct ServerSettingsPatch {
     pub public_registration_enabled: Option<bool>,
     pub google_login_enabled: Option<bool>,
+    pub yandex_login_enabled: Option<bool>,
+    pub vk_login_enabled: Option<bool>,
     pub support_max_reports_per_day: Option<i64>,
     pub feature_request_max_per_day: Option<i64>,
     pub feature_request_expose_issue_url: Option<bool>,
@@ -48,6 +54,8 @@ impl ServerSettings {
         Self {
             public_registration_enabled: get_env_bool("PUBLIC_REGISTRATION_ENABLED", true),
             google_login_enabled: get_env_bool("GOOGLE_LOGIN_ENABLED", true),
+            yandex_login_enabled: get_env_bool("YANDEX_LOGIN_ENABLED", false),
+            vk_login_enabled: get_env_bool("VK_LOGIN_ENABLED", false),
             support_max_reports_per_day: get_env_with_default("SUPPORT_MAX_REPORTS_PER_DAY", "10")
                 .parse()
                 .unwrap_or(10),
@@ -74,6 +82,12 @@ pub async fn load(pool: &PgPool) -> Result<ServerSettings, sqlx::Error> {
     }
     if let Some(value) = values.get(GOOGLE_LOGIN_ENABLED) {
         settings.google_login_enabled = value.as_bool().unwrap_or(true);
+    }
+    if let Some(value) = values.get(YANDEX_LOGIN_ENABLED) {
+        settings.yandex_login_enabled = value.as_bool().unwrap_or(false);
+    }
+    if let Some(value) = values.get(VK_LOGIN_ENABLED) {
+        settings.vk_login_enabled = value.as_bool().unwrap_or(false);
     }
     if let Some(value) = values.get(SUPPORT_MAX_REPORTS_PER_DAY) {
         settings.support_max_reports_per_day = value.as_i64().unwrap_or(10);
@@ -154,6 +168,24 @@ pub async fn update(
         write_value(
             &mut tx,
             GOOGLE_LOGIN_ENABLED,
+            Value::Bool(value),
+            administrator_id,
+        )
+        .await?;
+    }
+    if let Some(value) = patch.yandex_login_enabled {
+        write_value(
+            &mut tx,
+            YANDEX_LOGIN_ENABLED,
+            Value::Bool(value),
+            administrator_id,
+        )
+        .await?;
+    }
+    if let Some(value) = patch.vk_login_enabled {
+        write_value(
+            &mut tx,
+            VK_LOGIN_ENABLED,
             Value::Bool(value),
             administrator_id,
         )

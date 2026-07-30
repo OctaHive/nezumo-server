@@ -148,7 +148,7 @@ pub async fn login(
             .into_response());
     }
 
-    issue_login_response(&user.email)
+    issue_login_response(user.id)
 }
 
 /// Complete login with TOTP.
@@ -252,15 +252,15 @@ pub async fn login_totp(
     }
 
     let _ = delete_login_challenge(&state.database, challenge.id).await;
-    issue_login_response(&user.email)
+    issue_login_response(user.id)
 }
 
 pub(crate) fn issue_login_response(
-    email: &str,
+    user_id: uuid::Uuid,
 ) -> Result<axum::response::Response, (StatusCode, Json<serde_json::Value>)> {
     // Generate a JWT token for the user.
-    let token = encode_jwt(email.to_string()).map_err(|_| {
-        error!("Error generating JWT for user: {}", email);
+    let token = encode_jwt(user_id.to_string()).map_err(|_| {
+        error!("Error generating JWT for user: {}", user_id);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "Internal server error." })),
@@ -268,7 +268,7 @@ pub(crate) fn issue_login_response(
     })?;
 
     // Log the successful sign-in.
-    debug!("User signed in: {}", email);
+    debug!("User signed in: {}", user_id);
 
     // Prepare response headers
     let mut headers = HeaderMap::new();

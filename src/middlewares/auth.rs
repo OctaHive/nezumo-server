@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tokio::time::interval;
 
 // Importing custom database query functions
-use crate::database::users::fetch_active_user_by_email_from_db;
+use crate::database::users::{fetch_active_user_by_email_from_db, fetch_active_user_by_id_from_db};
 
 use crate::core::config::get_env_bool; // For fetching environment variables
 use crate::models::auth::AuthError; // Import the AuthError struct for error handling
@@ -149,8 +149,7 @@ pub async fn authorize(
     // Decode the JWT securely
     let token_data = decode_jwt(token)?;
 
-    // Fetch the user from the database using the email from the decoded token
-    let current_user = fetch_active_user_by_email_from_db(&database, &token_data.claims.sub)
+    let current_user = fetch_active_user_from_subject(database, &token_data.claims.sub)
         .await
         .map_err(|_| AuthError {
             message: "Unauthorized user.".to_string(),
@@ -215,7 +214,7 @@ pub async fn optional_authorize(
     if let Some(token) = token_opt {
         if let Ok(token_data) = decode_jwt(token) {
             if let Ok(Some(user)) =
-                fetch_active_user_by_email_from_db(database, &token_data.claims.sub).await
+                fetch_active_user_from_subject(database, &token_data.claims.sub).await
             {
                 req.extensions_mut().insert(user);
             }
@@ -223,6 +222,19 @@ pub async fn optional_authorize(
     }
 
     next.run(req).await
+}
+
+async fn fetch_active_user_from_subject(
+    database: &PgPool,
+    subject: &str,
+) -> Result<Option<crate::models::user::User>, sqlx::Error> {
+    if let Ok(user_id) = Uuid::parse_str(subject) {
+        fetch_active_user_by_id_from_db(database, user_id).await
+    } else {
+        // Backward compatibility for JWTs issued before subjects moved from
+        // email addresses to stable user UUIDs.
+        fetch_active_user_by_email_from_db(database, subject).await
+    }
 }
 
 // Function to check rate limits for a user
