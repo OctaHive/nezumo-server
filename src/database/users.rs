@@ -9,7 +9,7 @@ use crate::models::user::*;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use sqlx::postgres::PgPool;
-use sqlx::Error;
+use sqlx::{Error, Postgres, Transaction};
 use uuid::Uuid;
 use validator::Validate;
 
@@ -291,18 +291,25 @@ pub async fn fetch_active_user_by_id_from_db(
     .await
 }
 
-/// Securely deletes a user by ID
+/// Deletes a user inside the caller's transaction and returns the stored avatar
+/// URL.
 ///
 /// # Security
 /// - Requires authentication and authorization
 /// - Parameterized query prevents SQL injection
-/// - Returns affected rows without sensitive data
-pub async fn delete_user_from_db(pool: &PgPool, id: Uuid) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query!("DELETE FROM users WHERE id = $1", id)
-        .execute(pool)
-        .await?;
-
-    Ok(result.rows_affected())
+///
+/// The outer `Option` is `None` when the user does not exist. The inner
+/// `Option` contains `profile_picture_url`, which can itself be `NULL`.
+pub async fn delete_user_from_db(
+    transaction: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<Option<Option<String>>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "DELETE FROM users WHERE id = $1 RETURNING profile_picture_url",
+    )
+    .bind(id)
+    .fetch_optional(&mut **transaction)
+    .await
 }
 
 async fn set_user_status_in_db(

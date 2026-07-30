@@ -4,6 +4,30 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 
 use crate::storage::StorageState;
 
+/// Extracts an object key only when `stored_url` points to the expected bucket
+/// on this application's storage endpoint.
+///
+/// External profile-picture URLs (for example, OAuth provider avatars) and
+/// URLs for other buckets are intentionally ignored.
+pub fn object_key_from_stored_url(
+    endpoint_url: &str,
+    bucket: &str,
+    stored_url: &str,
+) -> Option<String> {
+    let endpoint = endpoint_url.trim_end_matches('/');
+    if endpoint.is_empty() || bucket.is_empty() {
+        return None;
+    }
+
+    let storage_path = stored_url.strip_prefix(endpoint)?.strip_prefix('/')?;
+    let object_key = storage_path.strip_prefix(bucket)?.strip_prefix('/')?;
+    if object_key.is_empty() {
+        return None;
+    }
+
+    Some(object_key.to_string())
+}
+
 /// Deletes an object from S3/MinIO storage
 ///
 /// # Arguments
@@ -266,5 +290,74 @@ pub async fn gc_orphaned_board_storage_from_read_model(
     .await;
     if let Err(error) = tx.commit().await {
         tracing::warn!("asset gc fence release failed for board {board_id}: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::object_key_from_stored_url;
+
+    #[test]
+    fn extracts_key_from_own_storage_bucket_url() {
+        assert_eq!(
+            object_key_from_stored_url(
+                "https://storage.example.com",
+                "profile_pictures",
+                "https://storage.example.com/profile_pictures/profile_pictures/user.webp",
+            ),
+            Some("profile_pictures/user.webp".to_string())
+        );
+    }
+
+    #[test]
+    fn accepts_endpoint_with_trailing_slash() {
+        assert_eq!(
+            object_key_from_stored_url(
+                "https://storage.example.com/",
+                "profile_pictures",
+                "https://storage.example.com/profile_pictures/user.webp",
+            ),
+            Some("user.webp".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_external_or_different_bucket_urls() {
+        assert_eq!(
+            object_key_from_stored_url(
+                "https://storage.example.com",
+                "profile_pictures",
+                "https://oauth.example.com/avatar.webp",
+            ),
+            None
+        );
+        assert_eq!(
+            object_key_from_stored_url(
+                "https://storage.example.com",
+                "profile_pictures",
+                "https://storage.example.com/board-files/avatar.webp",
+            ),
+            None
+        );
+        assert_eq!(
+            object_key_from_stored_url(
+                "https://storage.example.com",
+                "profile_pictures",
+                "https://storage.example.com.evil/profile_pictures/avatar.webp",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_bucket_root_without_object_key() {
+        assert_eq!(
+            object_key_from_stored_url(
+                "https://storage.example.com",
+                "profile_pictures",
+                "https://storage.example.com/profile_pictures/",
+            ),
+            None
+        );
     }
 }
