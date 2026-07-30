@@ -1126,4 +1126,60 @@ mod tests {
             .expect("delete test user");
     }
 
+    #[tokio::test]
+    #[ignore = "requires NEZUMO_TEST_DATABASE_URL pointing to an isolated migrated PostgreSQL database"]
+    async fn deleting_user_cascades_usage_and_api_keys() {
+        let database_url = std::env::var("NEZUMO_TEST_DATABASE_URL")
+            .expect("NEZUMO_TEST_DATABASE_URL must point to an isolated migrated database");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("connect test database");
+
+        let user_id = Uuid::new_v4();
+        let username = format!("delete_{}", &user_id.simple().to_string()[..12]);
+        sqlx::query(
+            "INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, 'test')",
+        )
+        .bind(user_id)
+        .bind(&username)
+        .bind(format!("{username}@example.com"))
+        .execute(&pool)
+        .await
+        .expect("insert test user");
+        sqlx::query("INSERT INTO usage (endpoint, user_id) VALUES ('/test', $1)")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("insert usage");
+        sqlx::query("INSERT INTO apikeys (key_hash, user_id) VALUES ($1, $2)")
+            .bind(format!("test-{user_id}"))
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("insert API key");
+
+        let mut transaction = pool.begin().await.expect("begin deletion");
+        assert!(delete_user_from_db(&mut transaction, user_id)
+            .await
+            .expect("delete user")
+            .is_some());
+        transaction.commit().await.expect("commit deletion");
+
+        let usage_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM usage WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count usage");
+        let key_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM apikeys WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count API keys");
+        assert_eq!(usage_count, 0);
+        assert_eq!(key_count, 0);
+    }
 }
