@@ -15,6 +15,7 @@ use crate::database::connect::connect_to_database; // Function to connect to the
 use crate::database::connect::run_database_migrations; // Function to run database migrations
 use crate::jobs::previews::start_preview_job;
 use crate::jobs::session_cleanup::start_session_cleanup_job;
+use crate::jobs::storage_cleanup::start_storage_cleanup_job;
 use crate::jobs::yrs_compaction::start_yrs_compaction_job;
 use crate::jobs::yrs_retention::start_yrs_retention_job;
 use crate::mail::connect::connect_to_mail; // Function to connect to mail service
@@ -107,6 +108,13 @@ pub async fn create_server() -> Router<()> {
 
     // === Session Cleanup Job ===
     start_session_cleanup_job(shared_state.clone(), 30);
+
+    // === Durable S3 cleanup for deleted boards ===
+    start_storage_cleanup_job(
+        shared_state.clone(),
+        config::get_env_u64("STORAGE_DELETE_INTERVAL_SECONDS", 30),
+        config::get_env_u64("STORAGE_DELETE_BATCH_LIMIT", 20).min(i64::MAX as u64) as i64,
+    );
 
     // === Usage-record Flusher ===
     // The `authorize` middleware queues one usage record per authenticated

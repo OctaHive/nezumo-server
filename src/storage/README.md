@@ -36,6 +36,8 @@ The main storage client uses these environment variables:
 | `STORAGE_BUCKET_BOARD_FILES` | no | `board-files` | Bucket for board media, files, previews, and PDF data. |
 | `STORAGE_BUCKET_PROFILE_PICTURES` | no | `profile_pictures` | Bucket for user profile pictures. |
 | `STORAGE_PRESIGN_TTL_SECONDS` | no | `3600` | Default lifetime of refreshed board-media URLs. |
+| `STORAGE_DELETE_INTERVAL_SECONDS` | no | `30` | Retry interval for durable deleted-board cleanup. |
+| `STORAGE_DELETE_BATCH_LIMIT` | no | `20` | Maximum deleted-board prefixes processed per retry pass. |
 
 Support attachments may use a separate storage account. `handlers/support.rs`
 reads `STORAGE_SUPPORT_HOST`, `STORAGE_SUPPORT_PORT`, and
@@ -47,6 +49,14 @@ account credentials are configured separately with
 
 See [`backend/.env.example`](../../.env.example) and the Docker Compose files in
 `backend/` for complete local configuration examples.
+
+## Deleted-board cleanup
+
+Every board object must live below `boards/{board_id}/` in
+`STORAGE_BUCKET_BOARD_FILES`. A PostgreSQL trigger records a durable cleanup
+job whenever a board is deleted, including deletions cascaded from a project or
+user. The API performs an immediate best-effort pass for direct board deletes,
+and the background worker retries queued prefixes until S3 confirms success.
 
 ## Usage
 

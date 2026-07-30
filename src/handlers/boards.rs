@@ -18,7 +18,7 @@ use rand::distributions::Alphanumeric;
 use rand::Rng;
 
 use crate::core::config::{get_env_u64, get_env_with_default};
-use crate::database::board_files::{insert_board_file, list_board_files_by_board_id};
+use crate::database::board_files::insert_board_file;
 use crate::database::board_invite_links::{
     create_invite_link as db_create_invite_link, delete_invite_link as db_delete_invite_link,
     get_invite_link_by_token, get_invite_link_info, list_invite_links as db_list_invite_links,
@@ -49,7 +49,7 @@ use crate::models::boards::{
 };
 use crate::models::user::User;
 use crate::routes::AppState;
-use crate::storage::delete::delete_from_storage;
+use crate::storage::delete::{delete_from_storage, delete_objects_with_prefix};
 use crate::storage::presign_url::generate_presigned_url;
 use crate::storage::upload::upload_to_storage;
 
@@ -1252,6 +1252,23 @@ async fn ensure_board_edit_access(
     Ok(board)
 }
 
+async fn cleanup_failed_pdf_upload(
+    state: &AppState,
+    bucket: &str,
+    document_prefix: &str,
+    board_id: Uuid,
+    doc_id: Uuid,
+) {
+    if let Err(error) = delete_objects_with_prefix(&state.storage, bucket, document_prefix).await {
+        tracing::error!(
+            board_id = %board_id,
+            document_id = %doc_id,
+            error = %error,
+            "Could not clean up incomplete PDF upload"
+        );
+    }
+}
+
 #[instrument(skip(state, multipart))]
 pub async fn upload_board_pdf(
     State(state): State<Arc<AppState>>,
@@ -1341,6 +1358,7 @@ pub async fn upload_board_pdf(
     }
 
     let bucket = get_env_with_default("STORAGE_BUCKET_BOARD_FILES", "board-files");
+    let document_prefix = format!("boards/{board_id}/pdf/{doc_id}/");
     let mut page_count: u32 = 0;
     let (mut page_w, mut page_h) = (595.5f32, 842.25f32);
     // mutool emits 1-based page-1.svg, page-2.svg, ...; store as 0-based.
@@ -1358,12 +1376,12 @@ pub async fn upload_board_pdf(
             }
         }
         let object_key = format!("boards/{}/pdf/{}/page-{}.svg", board_id, doc_id, n - 1);
-        upload_to_storage(&state.storage, &bucket, &object_key, &svg)
-            .await
-            .map_err(|e| {
-                tracing::error!("page upload error: {e}");
-                server_error("Failed to store page")
-            })?;
+        if let Err(error) = upload_to_storage(&state.storage, &bucket, &object_key, &svg).await {
+            tracing::error!("page upload error: {error}");
+            cleanup_failed_pdf_upload(&state, &bucket, &document_prefix, board_id, doc_id).await;
+            let _ = std::fs::remove_dir_all(&work_dir);
+            return Err(server_error("Failed to store page"));
+        }
         page_count += 1;
         n += 1;
     }
@@ -1379,12 +1397,16 @@ pub async fn upload_board_pdf(
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| "document.pdf".to_string());
     let source_object_key = format!("boards/{}/pdf/{}/original.pdf", board_id, doc_id);
-    let source_url = upload_to_storage(&state.storage, &bucket, &source_object_key, &pdf_bytes)
-        .await
-        .map_err(|e| {
-            tracing::error!("Original PDF upload error: {e}");
-            server_error("Failed to store original PDF")
-        })?;
+    let source_url =
+        match upload_to_storage(&state.storage, &bucket, &source_object_key, &pdf_bytes).await {
+            Ok(url) => url,
+            Err(error) => {
+                tracing::error!("Original PDF upload error: {error}");
+                cleanup_failed_pdf_upload(&state, &bucket, &document_prefix, board_id, doc_id)
+                    .await;
+                return Err(server_error("Failed to store original PDF"));
+            }
+        };
     let source_insert = BoardFileInsert {
         board_id,
         uploader_id: Some(current_user.id),
@@ -1394,7 +1416,11 @@ pub async fn upload_board_pdf(
         original_name: Some(source_name.clone()),
         url: source_url,
     };
-    record_uploaded_file(&state, board.owner_id, &bucket, &source_insert).await?;
+    if let Err(error) = record_uploaded_file(&state, board.owner_id, &bucket, &source_insert).await
+    {
+        cleanup_failed_pdf_upload(&state, &bucket, &document_prefix, board_id, doc_id).await;
+        return Err(error);
+    }
 
     Ok(Json(json!({
         "docId": doc_id.to_string(),
@@ -1666,43 +1692,25 @@ pub async fn delete_board(
         ));
     }
 
-    let bucket = get_env_with_default("STORAGE_BUCKET_BOARD_FILES", "board-files");
-    match list_board_files_by_board_id(&state.database, board_id).await {
-        Ok(files) => {
-            for file in files {
-                if let Err(err) =
-                    delete_from_storage(&state.storage, &bucket, &file.object_key).await
-                {
-                    tracing::error!("Failed to delete file {}: {err}", file.object_key);
-                }
-            }
-        }
-        Err(err) => {
-            tracing::error!("Failed to list board files: {err}");
-        }
-    }
-
-    // Remove all converted PDF pages (not tracked in board_files).
-    crate::storage::delete::gc_orphaned_pdf_docs(
-        &state.storage,
-        board_id,
-        &std::collections::HashSet::new(),
-        0,
-    )
-    .await;
-
-    // Remove the server-rendered preview thumbnail (also not in board_files).
-    let preview_key = format!("boards/{}/preview.png", board_id);
-    if let Err(err) = delete_from_storage(&state.storage, &bucket, &preview_key).await {
-        tracing::debug!("preview delete for board {board_id} (may not exist): {err}");
-    }
-
     match delete_board_by_id(&state.database, board_id).await {
-        Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(_) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "Could not delete board." })),
-        )),
+        Ok(_) => {
+            // The DB trigger has durably queued a prefix cleanup. Do a fast
+            // first pass for low latency; the background worker performs a
+            // delayed second pass and retries transient S3 failures.
+            let cleanup_state = state.clone();
+            tokio::spawn(async move {
+                crate::jobs::storage_cleanup::cleanup_board_storage_now(&cleanup_state, board_id)
+                    .await;
+            });
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(error) => {
+            tracing::error!("Could not delete board {board_id}: {error}");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Could not delete board." })),
+            ))
+        }
     }
 }
 

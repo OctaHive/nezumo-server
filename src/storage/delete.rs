@@ -73,6 +73,74 @@ pub async fn delete_from_storage(
     }
 }
 
+fn validate_deletion_prefix(prefix: &str) -> Result<(), String> {
+    if prefix.trim().is_empty() {
+        return Err("Delete-prefix error: object prefix is empty".to_string());
+    }
+    if !prefix.ends_with('/') {
+        return Err("Delete-prefix error: object prefix must end with '/'".to_string());
+    }
+    Ok(())
+}
+
+/// Deletes every object below an exact S3 prefix.
+///
+/// Keys are listed completely before deletion begins. If listing or any
+/// deletion fails, the caller receives an error and can safely retry: S3 object
+/// deletion is idempotent.
+pub async fn delete_objects_with_prefix(
+    state: &StorageState,
+    bucket: &str,
+    prefix: &str,
+) -> Result<usize, String> {
+    if bucket.trim().is_empty() {
+        return Err("Delete-prefix error: bucket name is empty".to_string());
+    }
+    validate_deletion_prefix(prefix)?;
+
+    let mut keys = Vec::new();
+    let mut continuation_token: Option<String> = None;
+    loop {
+        let mut request = state.client.list_objects_v2().bucket(bucket).prefix(prefix);
+        if let Some(token) = &continuation_token {
+            request = request.continuation_token(token);
+        }
+
+        let response = request.send().await.map_err(|error| {
+            let code = error.code().unwrap_or("Unknown");
+            let message = error.message().unwrap_or("No error message provided");
+            format!(
+                "Failed to list objects below {}/{} (code: {}): {}",
+                bucket, prefix, code, message
+            )
+        })?;
+
+        keys.extend(
+            response
+                .contents()
+                .iter()
+                .filter_map(|object| object.key().map(str::to_string)),
+        );
+
+        if response.is_truncated().unwrap_or(false) {
+            continuation_token = response.next_continuation_token().map(str::to_string);
+            if continuation_token.is_none() {
+                return Err(format!(
+                    "S3 returned a truncated listing without a continuation token for {bucket}/{prefix}"
+                ));
+            }
+        } else {
+            break;
+        }
+    }
+
+    let object_count = keys.len();
+    for key in keys {
+        delete_from_storage(state, bucket, &key).await?;
+    }
+    Ok(object_count)
+}
+
 /// Garbage-collect a board's converted PDF pages from storage. Deletes every
 /// `boards/{board_id}/pdf/{doc_id}/...` object whose `doc_id` is NOT in
 /// `referenced`, skipping docs whose newest object is younger than `grace_secs`
@@ -295,7 +363,7 @@ pub async fn gc_orphaned_board_storage_from_read_model(
 
 #[cfg(test)]
 mod tests {
-    use super::object_key_from_stored_url;
+    use super::{object_key_from_stored_url, validate_deletion_prefix};
 
     #[test]
     fn extracts_key_from_own_storage_bucket_url() {
@@ -359,5 +427,12 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn destructive_prefix_must_be_non_empty_directory() {
+        assert!(validate_deletion_prefix("boards/board-id/").is_ok());
+        assert!(validate_deletion_prefix("").is_err());
+        assert!(validate_deletion_prefix("boards/board-id").is_err());
     }
 }

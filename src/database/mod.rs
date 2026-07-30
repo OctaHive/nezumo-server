@@ -22,6 +22,7 @@ pub mod projects;
 pub mod quotas;
 pub mod server_settings;
 pub mod snapshots;
+pub mod storage_deletion_jobs;
 pub mod totp_enrollments;
 pub mod usage;
 pub mod users;

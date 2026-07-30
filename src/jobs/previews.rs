@@ -25,6 +25,7 @@ use uuid::Uuid;
 use crate::core::config::{get_env_u64, get_env_with_default};
 use crate::jobs::preview_service::PreviewService;
 use crate::routes::AppState;
+use crate::storage::delete::delete_from_storage;
 use crate::storage::presign_url::{refresh_pdf_page_presigned_urls, refresh_state_presigned_urls};
 use crate::storage::upload::upload_to_storage;
 
@@ -523,11 +524,26 @@ pub async fn generate_and_store(
     .execute(&state.database)
     .await;
     match updated {
-        Ok(_) => info!(
+        Ok(result) if result.rows_affected() == 1 => info!(
             "preview generated for board {} ({} bytes)",
             board_id,
             png.len()
         ),
-        Err(err) => warn!("preview db update failed for board {}: {:?}", board_id, err),
+        Ok(_) => {
+            warn!("preview target board {board_id} no longer exists; removing uploaded thumbnail");
+            if let Err(error) = delete_from_storage(&state.storage, &bucket, &object_key).await {
+                warn!("preview cleanup failed for deleted board {board_id}: {error}");
+            }
+        }
+        Err(error) => {
+            warn!("preview db update failed for board {board_id}: {error:?}");
+            if let Err(cleanup_error) =
+                delete_from_storage(&state.storage, &bucket, &object_key).await
+            {
+                warn!(
+                    "preview cleanup after database failure failed for board {board_id}: {cleanup_error}"
+                );
+            }
+        }
     }
 }
